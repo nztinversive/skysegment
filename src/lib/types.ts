@@ -34,6 +34,12 @@ export interface ImageRecord {
   imageUrl: string;
 }
 
+export interface CustomClass {
+  text: string;        // SAM 3 text prompt (e.g. "solar panel")
+  classLabel: SegmentClass;  // which visual class to map to
+  color?: string;      // optional custom color override
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -42,6 +48,7 @@ export interface Project {
   updatedAt: string;
   imageCount: number;
   imageIds: string[];
+  customClasses?: CustomClass[];
 }
 
 export const CLASS_COLORS: Record<SegmentClass, string> = {

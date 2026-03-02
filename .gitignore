@@ -38,3 +38,9 @@ next-env.d.ts
 # data
 /data/uploads/*
 !/data/uploads/.gitkeep
+/data/projects/*
+!/data/projects/.gitkeep
+
+# test files
+test-*.jpg
+test-*.js
