@@ -1,12 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ImageRecord, Segment, SegmentClass, CLASS_LABELS, CLASS_ICONS, CLASS_COLORS } from '@/lib/types';
+import { ImageRecord, Segment, SegmentClass, CustomClass, CLASS_LABELS, CLASS_ICONS, CLASS_COLORS } from '@/lib/types';
 
-export default function SegmentViewer({ image }: { image: ImageRecord }) {
+interface SegmentViewerProps {
+  image: ImageRecord;
+  onResegment?: (updatedImage: ImageRecord) => void;
+}
+
+export default function SegmentViewer({ image, onResegment }: SegmentViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const originalCanvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const [segments] = useState<Segment[]>(image.segments);
+  const [segments, setSegments] = useState<Segment[]>(image.segments);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
   const [classVisibility, setClassVisibility] = useState<Record<SegmentClass, boolean>>(() => {
     const vis: Record<string, boolean> = {};
@@ -14,6 +20,24 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     return vis;
   });
   const [overlayOpacity, setOverlayOpacity] = useState(0.4);
+  const [compareMode, setCompareMode] = useState(false);
+
+  // Re-segment state
+  const [resegmenting, setResegmenting] = useState(false);
+  const [resegClasses, setResegClasses] = useState<CustomClass[]>([
+    { text: 'tree or bush or grass', classLabel: 'vegetation' },
+    { text: 'water or pond or river', classLabel: 'water' },
+    { text: 'building or structure', classLabel: 'structure' },
+    { text: 'bare soil or dirt', classLabel: 'bare_earth' },
+    { text: 'road or pavement', classLabel: 'road' },
+    { text: 'car or truck or vehicle', classLabel: 'vehicle' },
+  ]);
+  const [showResegPanel, setShowResegPanel] = useState(false);
+
+  // Sync segments when image prop changes
+  useEffect(() => {
+    setSegments(image.segments);
+  }, [image.segments]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -24,10 +48,8 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
 
-    // Draw image
     ctx.drawImage(img, 0, 0);
 
-    // Draw segments
     segments.forEach(seg => {
       if (!classVisibility[seg.classLabel]) return;
       if (!seg.visible) return;
@@ -39,16 +61,13 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
       });
       ctx.closePath();
 
-      // Fill
       ctx.fillStyle = seg.color + Math.round(overlayOpacity * 255).toString(16).padStart(2, '0');
       ctx.fill();
 
-      // Stroke
       ctx.strokeStyle = seg.color;
       ctx.lineWidth = selectedSegment?.id === seg.id ? 3 : 1;
       ctx.stroke();
 
-      // Label for selected
       if (selectedSegment?.id === seg.id) {
         const cx = seg.polygon.reduce((s, p) => s + p[0], 0) / seg.polygon.length;
         const cy = seg.polygon.reduce((s, p) => s + p[1], 0) / seg.polygon.length;
@@ -63,6 +82,16 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     });
   }, [segments, selectedSegment, classVisibility, overlayOpacity]);
 
+  const drawOriginal = useCallback(() => {
+    const canvas = originalCanvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img) return;
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+  }, []);
+
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -70,10 +99,12 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     img.onload = () => {
       imgRef.current = img;
       draw();
+      if (compareMode) drawOriginal();
     };
-  }, [image.imageUrl, draw]);
+  }, [image.imageUrl, draw, compareMode, drawOriginal]);
 
   useEffect(() => { draw(); }, [draw]);
+  useEffect(() => { if (compareMode) drawOriginal(); }, [compareMode, drawOriginal]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!;
@@ -83,7 +114,6 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
 
-    // Find clicked segment (reverse order = topmost first)
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i];
       if (!classVisibility[seg.classLabel] || !seg.visible) continue;
@@ -99,7 +129,41 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
     setClassVisibility(prev => ({ ...prev, [cls]: !prev[cls] }));
   };
 
-  // Class summary
+  const handleResegment = async () => {
+    setResegmenting(true);
+    try {
+      const res = await fetch('/api/segment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageId: image.id, classes: resegClasses }),
+      });
+      if (!res.ok) throw new Error('Segmentation failed');
+      const data = await res.json();
+      setSegments(data.segments);
+      setSelectedSegment(null);
+      setShowResegPanel(false);
+      if (onResegment) {
+        onResegment({ ...image, segments: data.segments, segmentCount: data.segmentCount });
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Re-segmentation failed');
+    } finally {
+      setResegmenting(false);
+    }
+  };
+
+  const updateResegClass = (index: number, field: 'text' | 'classLabel', value: string) => {
+    setResegClasses(prev => prev.map((c, i) => i === index ? { ...c, [field]: value } : c));
+  };
+
+  const removeResegClass = (index: number) => {
+    setResegClasses(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const addResegClass = () => {
+    setResegClasses(prev => [...prev, { text: '', classLabel: 'unknown' }]);
+  };
+
   const classSummary = Object.keys(CLASS_COLORS).map(cls => {
     const segs = segments.filter(s => s.classLabel === cls);
     const totalArea = segs.reduce((s, seg) => s + seg.areaPercent, 0);
@@ -111,9 +175,20 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
       {/* Canvas area */}
       <div className="flex-1 min-w-0">
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <div className="p-3 border-b border-gray-800 flex items-center justify-between">
+          <div className="p-3 border-b border-gray-800 flex items-center justify-between flex-wrap gap-2">
             <h2 className="text-sm font-medium text-gray-300">{image.originalName}</h2>
             <div className="flex items-center gap-3">
+              {/* Compare toggle */}
+              <button
+                onClick={() => setCompareMode(!compareMode)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  compareMode
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                {compareMode ? '🔲 Split View' : '🔲 Compare'}
+              </button>
               <label className="text-xs text-gray-500">Opacity</label>
               <input
                 type="range"
@@ -127,16 +202,36 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
             </div>
           </div>
           <div className="p-2">
-            <canvas
-              ref={canvasRef}
-              onClick={handleCanvasClick}
-              className="w-full h-auto cursor-crosshair rounded-lg"
-            />
+            {compareMode ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs text-gray-500 text-center mb-1">Original</div>
+                  <canvas
+                    ref={originalCanvasRef}
+                    className="w-full h-auto rounded-lg"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500 text-center mb-1">Segmented</div>
+                  <canvas
+                    ref={canvasRef}
+                    onClick={handleCanvasClick}
+                    className="w-full h-auto cursor-crosshair rounded-lg"
+                  />
+                </div>
+              </div>
+            ) : (
+              <canvas
+                ref={canvasRef}
+                onClick={handleCanvasClick}
+                className="w-full h-auto cursor-crosshair rounded-lg"
+              />
+            )}
           </div>
         </div>
 
-        {/* Export buttons */}
-        <div className="flex gap-2 mt-3">
+        {/* Action buttons */}
+        <div className="flex gap-2 mt-3 flex-wrap">
           <a
             href={`/api/images/${image.id}/export?format=geojson`}
             download
@@ -157,7 +252,73 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
           >
             <span>📊</span> Export CSV
           </a>
+          <button
+            onClick={() => setShowResegPanel(!showResegPanel)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+              showResegPanel
+                ? 'bg-yellow-600 hover:bg-yellow-700 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+            }`}
+          >
+            <span>🔄</span> Re-segment
+          </button>
         </div>
+
+        {/* Re-segment panel */}
+        {showResegPanel && (
+          <div className="mt-3 bg-gray-900 rounded-xl border border-yellow-500/30 p-4">
+            <h3 className="text-sm font-semibold text-yellow-400 mb-3">Re-segment with New Classes</h3>
+            <div className="space-y-2 mb-3">
+              {resegClasses.map((cls, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    value={cls.text}
+                    onChange={e => updateResegClass(i, 'text', e.target.value)}
+                    placeholder="What to find..."
+                    className="flex-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-yellow-500"
+                  />
+                  <select
+                    value={cls.classLabel}
+                    onChange={e => updateResegClass(i, 'classLabel', e.target.value)}
+                    className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-300 focus:outline-none"
+                  >
+                    {(Object.keys(CLASS_COLORS) as SegmentClass[]).map(c => (
+                      <option key={c} value={c}>{CLASS_ICONS[c]} {CLASS_LABELS[c]}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => removeResegClass(i)}
+                    className="text-gray-600 hover:text-red-400 p-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={addResegClass}
+                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs"
+              >
+                + Add Class
+              </button>
+              <button
+                onClick={handleResegment}
+                disabled={resegmenting || resegClasses.filter(c => c.text.trim()).length === 0}
+                className="px-4 py-1.5 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {resegmenting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Running SAM 3...
+                  </>
+                ) : (
+                  '🚀 Run Segmentation'
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Right panel */}
@@ -237,7 +398,7 @@ export default function SegmentViewer({ image }: { image: ImageRecord }) {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Segments</span>
-              <span className="text-gray-300">{image.segmentCount}</span>
+              <span className="text-gray-300">{segments.length}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Uploaded</span>

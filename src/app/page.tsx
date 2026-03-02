@@ -5,6 +5,7 @@ import Sidebar from '@/components/Sidebar';
 import UploadZone from '@/components/UploadZone';
 import ImageGrid from '@/components/ImageGrid';
 import ClassEditor from '@/components/ClassEditor';
+import SegmentStats from '@/components/SegmentStats';
 import { Project, ImageRecord, CustomClass } from '@/lib/types';
 
 const DEFAULT_CLASSES: CustomClass[] = [
@@ -115,6 +116,7 @@ export default function Home() {
             </div>
           ) : (
             <div className="space-y-4">
+              <SegmentStats images={images} />
               <ClassEditor classes={classes} onChange={handleClassChange} />
               <UploadZone projectId={activeProject.id} classes={classes} onUpload={loadImages} />
               {loading ? (

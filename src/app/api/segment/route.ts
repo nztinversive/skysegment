@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getImage, saveImage, getUploadsDir } from '@/lib/storage';
 import { segmentImage } from '@/lib/roboflow';
-import { SegmentClass } from '@/lib/types';
 import path from 'path';
 
 /**
